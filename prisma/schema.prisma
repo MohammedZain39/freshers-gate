@@ -1,0 +1,108 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model AdminUser {
+  id           String    @id @default(cuid())
+  name         String
+  email        String    @unique
+  passwordHash String
+  role         AdminRole @default(ADMIN)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  entryLogs     EntryLog[]
+  eventControls EventControl[]
+}
+
+model Student {
+  id          String @id @default(cuid())
+  rollNo      String @unique
+  studentName String
+  program     String
+  branch      String
+  year        Int
+
+  status      StudentStatus @default(ACTIVE)
+  qrTokenHash String?       @unique
+
+  // First successful entry into Freshers
+  enteredAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  entryLogs EntryLog[]
+
+  @@index([year])
+  @@index([branch])
+  @@index([status])
+  @@index([enteredAt])
+}
+
+model EntryLog {
+  id String @id @default(cuid())
+
+  studentId String
+  student   Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  scannerId String?
+  scanner   AdminUser? @relation(fields: [scannerId], references: [id], onDelete: SetNull)
+
+  scannedAt DateTime @default(now())
+
+  result       EntryResult
+  denialReason String?
+
+  @@index([studentId])
+  @@index([scannedAt])
+}
+
+model EventControl {
+  id        String @id @default(cuid())
+  eventName String @unique
+
+  entryEnabled Boolean @default(false)
+
+  startedAt DateTime?
+  stoppedAt DateTime?
+
+  updatedById String?
+  updatedBy   AdminUser? @relation(fields: [updatedById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model GateDevice {
+  id         String   @id @default(cuid())
+  name       String
+  tokenHash  String   @unique
+  active     Boolean  @default(true)
+  lastSeenAt DateTime?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([active])
+}
+
+enum AdminRole {
+  ADMIN
+  SCANNER
+}
+
+enum StudentStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum EntryResult {
+  ALLOWED
+  DENIED
+  ALREADY_ENTERED
+}
