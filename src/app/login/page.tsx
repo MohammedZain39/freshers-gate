@@ -1,8 +1,43 @@
+
 "use client";
 
 import { FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ShieldCheck, Loader2 } from "lucide-react";
+
+function getSafeNextPath(value: string | null): string | null {
+  if (!value || !value.startsWith("/") || value.startsWith("//")) {
+    return null;
+  }
+
+  try {
+    const url = new URL(value, window.location.origin);
+
+    // Only allow redirects within this application.
+    if (url.origin !== window.location.origin) {
+      return null;
+    }
+
+    const path = url.pathname;
+
+    // Allow QR verification only for a 64-character hexadecimal token.
+    if (/^\/v\/[a-fA-F0-9]{64}$/.test(path)) {
+      return `${path}${url.search}${url.hash}`;
+    }
+
+    // Allow the standard application destinations.
+    if (
+      path === "/gate" ||
+      path === "/dashboard"
+    ) {
+      return `${path}${url.search}${url.hash}`;
+    }
+
+    return null;
+  } catch {
+    return null;
+  }
+}
 
 export default function LoginPage() {
   const router = useRouter();
@@ -21,6 +56,17 @@ export default function LoginPage() {
     setLoading(true);
 
     try {
+      // Read and validate the requested destination.
+      // Read it in the submit handler to avoid useSearchParams
+      // static-rendering/Suspense issues.
+      const query = new URLSearchParams(
+        window.location.search
+      );
+
+      const nextPath = getSafeNextPath(
+        query.get("next")
+      );
+
       // =========================================
       // OFFLINE LOGIN
       // =========================================
@@ -50,7 +96,6 @@ export default function LoginPage() {
             return;
           }
 
-          // Save/refresh local gate session
           const { saveLocalGateSession } = await import(
             "@/lib/offline/session"
           );
@@ -62,20 +107,17 @@ export default function LoginPage() {
             authenticatedAt: new Date().toISOString(),
           });
 
+          // Offline login cannot create the server-side
+          // authentication cookie required for QR verification.
+          // Send the user to the offline-capable gate.
           router.replace("/gate");
           router.refresh();
 
           return;
         } catch (offlineError) {
-          console.error(
-            "Offline login error:",
-            offlineError
-          );
+          console.error("Offline login error:", offlineError);
 
-          setError(
-            "Unable to perform offline login."
-          );
-
+          setError("Unable to perform offline login.");
           return;
         }
       }
@@ -84,20 +126,18 @@ export default function LoginPage() {
       // ONLINE LOGIN
       // =========================================
 
-      const response = await fetch(
-        "/api/auth/login",
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          credentials: "include",
-          body: JSON.stringify({
-            email: email.trim(),
-            password,
-          }),
-        }
-      );
+      const response = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        credentials: "include",
+        cache: "no-store",
+        body: JSON.stringify({
+          email: email.trim(),
+          password,
+        }),
+      });
 
       let data: {
         success?: boolean;
@@ -114,25 +154,17 @@ export default function LoginPage() {
       try {
         data = await response.json();
       } catch {
-        setError(
-          "Server returned an invalid response."
-        );
+        setError("Server returned an invalid response.");
         return;
       }
 
       if (!response.ok) {
-        setError(
-          data.error ||
-            "Invalid email or password."
-        );
+        setError(data.error || "Invalid email or password.");
         return;
       }
 
       if (!data.success || !data.user) {
-        setError(
-          data.error ||
-            "Authentication failed."
-        );
+        setError(data.error || "Authentication failed.");
         return;
       }
 
@@ -144,50 +176,51 @@ export default function LoginPage() {
         "@/lib/offline/auth"
       );
 
-      await saveOfflineAuth(
-        password,
-        {
-          id: data.user.id,
-          name: data.user.name,
-          role: data.user.role,
-        }
-      );
+      await saveOfflineAuth(password, {
+        id: data.user.id,
+        name: data.user.name,
+        role: data.user.role,
+      });
 
       // =========================================
       // SAVE LOCAL GATE SESSION
       // =========================================
 
-      const { saveLocalGateSession } =
-        await import(
-          "@/lib/offline/session"
-        );
+      const { saveLocalGateSession } = await import(
+        "@/lib/offline/session"
+      );
 
       await saveLocalGateSession({
         id: data.user.id,
         name: data.user.name,
         role: data.user.role,
-        authenticatedAt:
-          new Date().toISOString(),
+        authenticatedAt: new Date().toISOString(),
       });
 
       // =========================================
-      // ROLE-BASED REDIRECT
+      // SAFE ROLE-BASED REDIRECT
       // =========================================
 
-      if (data.redirectTo) {
-        router.replace(
-          data.redirectTo
-        );
-      } else {
-        router.replace("/dashboard");
-      }
+      const defaultDestination =
+        data.user.role === "SCANNER"
+          ? "/gate"
+          : "/dashboard";
 
+      // The validated `next` destination takes priority.
+      // Otherwise, use the server redirect only if it is safe.
+      const serverDestination = getSafeNextPath(
+        data.redirectTo ?? null
+      );
+
+      const destination =
+        nextPath ??
+        serverDestination ??
+        defaultDestination;
+
+      router.replace(destination);
       router.refresh();
     } catch (error) {
-      console.error(
-        "Login error:",
-        error
-      );
+      console.error("Login error:", error);
 
       setError(
         error instanceof Error
@@ -202,7 +235,6 @@ export default function LoginPage() {
   return (
     <main className="flex min-h-screen items-center justify-center bg-slate-950 px-6">
       <div className="w-full max-w-md">
-
         {/* BRAND */}
         <div className="mb-8 text-center">
           <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-white text-slate-950">
@@ -220,7 +252,6 @@ export default function LoginPage() {
 
         {/* LOGIN CARD */}
         <div className="rounded-2xl border border-slate-800 bg-slate-900 p-6 shadow-2xl">
-
           <div className="mb-6">
             <h2 className="text-xl font-semibold text-white">
               Secure Login
@@ -235,21 +266,22 @@ export default function LoginPage() {
             onSubmit={handleSubmit}
             className="space-y-5"
           >
-
             {/* EMAIL */}
             <div>
-              <label className="mb-2 block text-sm font-medium text-slate-300">
+              <label
+                htmlFor="email"
+                className="mb-2 block text-sm font-medium text-slate-300"
+              >
                 Email
               </label>
 
               <input
+                id="email"
                 type="email"
                 value={email}
-                onChange={(e) =>
-                  setEmail(e.target.value)
-                }
+                onChange={(e) => setEmail(e.target.value)}
                 placeholder="admin@freshersgate.local"
-                autoComplete="email"
+                autoComplete="username"
                 required
                 className="w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none transition placeholder:text-slate-600 focus:border-slate-400"
               />
@@ -257,16 +289,18 @@ export default function LoginPage() {
 
             {/* PASSWORD */}
             <div>
-              <label className="mb-2 block text-sm font-medium text-slate-300">
+              <label
+                htmlFor="password"
+                className="mb-2 block text-sm font-medium text-slate-300"
+              >
                 Password
               </label>
 
               <input
+                id="password"
                 type="password"
                 value={password}
-                onChange={(e) =>
-                  setPassword(e.target.value)
-                }
+                onChange={(e) => setPassword(e.target.value)}
                 placeholder="Enter your password"
                 autoComplete="current-password"
                 required
@@ -276,7 +310,10 @@ export default function LoginPage() {
 
             {/* ERROR */}
             {error && (
-              <div className="rounded-xl border border-red-900 bg-red-950/40 px-4 py-3 text-sm text-red-300">
+              <div
+                role="alert"
+                className="rounded-xl border border-red-900 bg-red-950/40 px-4 py-3 text-sm text-red-300"
+              >
                 {error}
               </div>
             )}
@@ -294,18 +331,14 @@ export default function LoginPage() {
                 />
               )}
 
-              {loading
-                ? "Signing in..."
-                : "Sign in"}
+              {loading ? "Signing in..." : "Sign in"}
             </button>
-
           </form>
         </div>
 
         <p className="mt-6 text-center text-xs text-slate-600">
           Freshers Gate • Secure Entry Management
         </p>
-
       </div>
     </main>
   );
